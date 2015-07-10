@@ -1,0 +1,235 @@
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache=TRUE)
+library(acs)
+api.key.install(key="7fb29c043363cb73a01e497f3075b73622304929")
+library(ggplot2)
+library(ggmap)
+library(dplyr)
+library(rgdal)
+library(RColorBrewer)
+library(scales)
+library(Cairo)
+library(stringr)
+library(png)
+library(grid)
+
+```
+My "Writing Sample" 
+========================================================
+author: Tim Phan
+date: 7/7/2014
+font-family: 'Garamond'
+Who am I?
+========================================================
+
+## I am a data analyst specializing in politics
+- Political Science @ UCSB
+- Worked in communications at a DC think tank specializing in economics and globalization
+- Political Data @ Nationbuilder, worked on the national voter file
+
+## My professional & personal aspirations
+- Become more fluent in data science, statistics, and programming
+- Carve out a meaningful niche in the city of LA as a go-between between tech and policy
+- Be of service to my heritage and community, especially targetting younger Asian-Americans who want to get into policy and data.
+
+========================================================
+
+### I have a love-hate relationship with spreadsheets.
+
+I started coding in grad school when my statistics professor forced us to use "R". I'd never heard of it before, but I was told it's a software platform similar to SPSS or STATA where we learned how to do various data analysis tasks.
+
+Since then, I've learned that R is so much than that. Programming in R opened my eyes up to doing mundane tasks in creative and efficient ways, which enabled my classmates and coworkers to do their jobs a little bit easier. Data manipulation, extracting, cleaning, all those boring things you have to do in Excel, it actually became fun and manageable in R.
+
+Let me show you what I can do with the American Census Survey in R.
+
+========================================================
+
+## The traditional way of accessing the ACS
+<img src="acs.png" alt="Drawing" style="width: 400px;"/>
+<br>
+<img src="acs2.png" alt="Drawing" style="width: 400px;"/>
+
+========================================================
+
+## Benefits of using the ACS API?
+-The API lets developers customize Census Bureau statistics into web or mobile apps that provide users quick and easy access from an every increasing pool of publicly available datasets"- (http://www.census.gov/data/developers/about.html)
+
+A MIT professor developed an open-source package in R (the "acs" package) which allows me to stream the ACS API directly into my workstation,
+
+Now I can perform data analysis and visualizations without needing to actually download the data, as long as I know what I'm looking for.
+
+
+========================================================
+## Let's start with a real issue: Health Insurance
+
+
+This is a choropleth chart looking at insurance coverage rates across the various California counties (darkest means more people are not covered). This data is collected from the ACS 2009 -- 2013 (5-Year Estimates) table B18135.
+
+```{r eval=FALSE, fig.height =1, tidy=TRUE, echo=FALSE} 
+county_choropleth_acs("B18135", endyear=2012, span=5, num_colors=7, state_zoom=c("california"))
+```
+
+```{r fig.width=10, fig.height=8,echo=FALSE}
+img <- readPNG("hi.png")
+ grid.raster(img)
+```
+
+========================================================
+It's a pretty picture, but it doesn't really help us. It looks like a population density map, and we don't really have any control over what happens in Fresno, San Diego, the Bay. But how can we can use data for more localized, actionable purposes?
+
+AAAJ-LA has worked on community outreach programs to help educate the local API community about Obamacare, such as the Chinatown Library “Health Matters” Project.
+
+Now I love Chinatown dim sum (and that Phoenix Bakery cake) as much as the next Asian, but what if we wanted to institute another program in the suburbs? For maximum impact, let's target a neighborhood with drastically lower rates of enrollment in health insurance. 
+
+
+
+
+
+
+========================================================
+#### Using the ACS package in R, we can lookup the appropriate table.
+
+<img src="acs3.png" alt="Drawing" style="width: 800px;"/>
+
+We'll filter rows 4, 7, and 10 (the Asians without coverage) and define a geographic area around Los Angeles and Orange County. By using census tracts as our geographic boundary, we'll be able to look deeper behind zip codes and citys. 
+
+========================================================
+Now we have a dataframe of nearly 3000 census tracts...
+```{r, echo=FALSE, cache=TRUE}
+laoc<- geo.make(state="CA", county=c("Los Angeles", "Orange"), tract="*")
+hey<- acs.fetch(endyear = 2012, span = 5, geo = laoc, table.number = "C27001D", col.names = "pretty")
+sad<- hey[, str_count(hey@acs.colnames, "No health insurance coverage") > 0]
+coverage.county.total <- apply(sad, 2, sum)
+coverage.rate <- divide.acs(numerator = coverage.county.total, denominator = hey[, 1], method = "proportion")
+coverage.est <- data.frame(
+  county = geography(coverage.rate)[[1]],
+  rate = as.numeric(estimate(coverage.rate)),
+  healthpop = as.numeric(estimate(hey[, 1]))
+)
+coverage.est$county<- gsub("Census Tract","", coverage.est$county)
+coverage.est$county<- gsub(", Los Angeles County, California","", coverage.est$county)
+colnames(coverage.est)<- c("census_tract","rate", "health_pop")
+head(coverage.est)
+```
+
+and once we join it to the proper shapefiles, we get this...
+
+========================================================
+
+
+## Downtown LA
+
+```{r echo=FALSE, message=FALSE, cache=TRUE, include=TRUE, results="hide", fig.width=20, fig.height=16}
+ 
+laoc<- geo.make(state="CA", county=c("Los Angeles", "Orange"), tract="*")
+hey<- acs.fetch(endyear = 2012, span = 5, geo = laoc, table.number = "C27001D", col.names = "pretty")
+sad<- hey[, str_count(hey@acs.colnames, "No health insurance coverage") > 0]
+coverage.county.total <- apply(sad, 2, sum)
+coverage.rate <- divide.acs(numerator = coverage.county.total, denominator = hey[, 1], method = "proportion")
+coverage.est <- data.frame(
+  county = geography(coverage.rate)[[1]],
+  rate = as.numeric(estimate(coverage.rate)),
+  healthpop = as.numeric(estimate(hey[, 1]))
+)
+
+
+tract<- hey@geography
+coverage.est$tract<- tract$tract
+colnames(coverage.est)<- c("county","percent","pop","id")
+
+la<- filter(coverage.est, grepl("Angeles",county))
+oc<- filter(coverage.est, !grepl("Angeles",county))
+la$id <- paste("1400000US06037", la$id, sep = "")
+oc$id <- paste("1400000US06059", oc$id, sep = "")
+ocla<- rbind(la,oc)
+
+state <- readOGR(dsn = ".", layer = "gz_2010_06_140_00_500k")
+state <- fortify(state, region="GEO_ID")
+lotData <- left_join(state, ocla)
+
+map <- get_map("Downtown Los Angeles", zoom = 13, maptype = "roadmap")
+p<- ggmap(map) +
+  geom_polygon(data = lotData, aes(x = long, y = lat, group = group,
+                                fill = percent), colour = NA, alpha = 0.5) +
+  scale_fill_distiller(palette = "YlOrRd", breaks = pretty_breaks(n = 10),
+                       labels = percent) +
+  labs(fill = "") +
+  theme_nothing(legend = TRUE) +
+  labs(title = "Percentage of API Population Without Health Insurance",
+        fill = "")
+  guides(fill = guide_legend(reverse = TRUE, override.aes =
+                               list(alpha = 1)))
+plot(p)
+```
+
+
+========================================================
+## San Gabriel Valley
+```{r echo=FALSE, message=FALSE, cache=TRUE, include=TRUE, results="hide", fig.width=20, fig.height=16}
+sgv <- get_map("San Gabriel Valley", zoom = 13, maptype = "roadmap")
+s<- ggmap(sgv) +
+  geom_polygon(data = lotData, aes(x = long, y = lat, group = group,
+                                fill = percent), colour = NA, alpha = 0.5) +
+  scale_fill_distiller(palette = "YlOrRd", breaks = pretty_breaks(n = 10),
+                       labels = percent) +
+  labs(fill = "") +
+  theme_nothing(legend = TRUE) +
+  guides(fill = guide_legend(reverse = TRUE, override.aes =
+                               list(alpha = 1)))
+plot(s)
+```
+
+
+========================================================
+## Orange County
+```{r echo=FALSE, message=FALSE, cache=TRUE, include=TRUE, results="hide", fig.width=20, fig.height=16}
+occ <- get_map("Orange County", zoom = 11, maptype = "roadmap")
+c<- ggmap(occ) +
+  geom_polygon(data = lotData, aes(x = long, y = lat, group = group,
+                                fill = percent), colour = NA, alpha = 0.5) +
+  scale_fill_distiller(palette = "YlOrRd", breaks = pretty_breaks(n = 10),
+                       labels = percent) +
+  labs(fill = "") +
+  theme_nothing(legend = TRUE) +
+  guides(fill = guide_legend(reverse = TRUE, override.aes =
+                               list(alpha = 1)))
+plot(c)
+```
+
+========================================================
+## Where should we prioritize our outreach then?
+
+Let's run a filter for 75% off coverage, with at least 200 people.
+
+```{r, echo=FALSE}
+coverage.est$county<- gsub("Census Tract","", coverage.est$county)
+coverage.est$county<- gsub(", Los Angeles County, California","", coverage.est$county)
+```
+
+```{r}
+coverage.est %>% filter(percent > 0.75) %>% filter(pop > 200)
+```
+
+Now we can match up Census Tract 1201.06 with the maps here http://www.census.gov/geo/maps-data/maps/2010ref/st06_tract.html
+<img src="acs4.png" alt="Drawing" style="width: 300px;"/>
+
+
+========================================================
+## Conclusions, and more questions...
+
+It's not surprising to see less coverage rates in East LA, while the more affluent OC surburbs are doing quite well. This reflects larger socioeconomic trends such as education, employment, governance that can't be easily encompassed in one simple map. 
+
+### Some potential avenues of research
+- How does this map compare to other minorities (Latino, African-American) or whites? 
+- Would these maps significantly change if we filtered it to working-age population (18-64 years old)?
+- Can we run statistical tests and regression analysis on other datasets of the same time period? Say there is a college-educated person in the household, how much would that affect enrollment rates?
+
+========================================================
+
+## Thank you for reading this
+
+I am looking to work with a service-oriented organization where I may apply my growing technical and data skills to things I truly care about. I want to work for an organization that challenges me to learn new things, and put me in a position to give back to a community here in Los Angeles. 
+
+The first choropleth map reflects a growing value of mine, and that is to focus on more localized issues and politics in my community (rather than international and national politics that I was attracted to in my youth). I believe that AA-AJ could be the right organization for me to embrace that, and I would love to continue this conversation if you feel the same way. 
+
+Please reach me at phan.timothyv@gmail.com, I hope to hear from you soon.
